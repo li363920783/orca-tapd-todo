@@ -47,7 +47,7 @@ orca plugin dev load .
 |---|---|---|
 | `workspaceId` | 空 | TAPD 项目 ID；负责人按「当前处理人」精确匹配，多人用分号分隔 |
 | `owner` | 空 | 负责人姓名；缺陷查 `current_owner`，需求查 `owner` |
-| `onlyOpen` | `true` | 只拉未关闭的工作项（`status != closed`） |
+| `onlyOpen` | `true` | 拉取用 `status != closed`，再按类型终态过滤：缺陷排除 `closed`/`rejected`，需求排除 `resolved`/`rejected`/`closed`/`done` |
 | `limit` | `100` | 合并后的最多显示条数（1–200）；每类最多从 TAPD 拉 200 条 |
 | `pollMinutes` | `5` | 状态栏轮询间隔（1–60 分钟） |
 | `dispatchWorkspace` | 空 | 派单目标工作区选择器，如 `path:/root/projects/your-repo` |
@@ -56,7 +56,7 @@ orca plugin dev load .
 
 ## 状态栏
 
-插件启用后 worker 常驻：立即算一次未关闭数，然后按 `pollMinutes` 轮询。状态栏显示 `TAPD N`，
+插件启用后 worker 常驻：立即算一次未关闭数，然后按 `pollMinutes` 轮询。状态栏显示 `TAPD N`（N 按上述终态集合排除），
 有未关闭时用 warning 色；未配置项目/负责人/令牌时显示 `TAPD –`。轮询失败只写插件日志
 （`orca plugin logs`），不会让 worker 退出，下一轮继续。
 

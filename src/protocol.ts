@@ -39,6 +39,9 @@ export type TapdListResult = {
   fetchedAt: number
   items: TapdItem[]
   counts: TapdStatusCount[]
+  /** Work items not in their kind's terminal status (bugs: closed/rejected; stories:
+   *  resolved/rejected/closed/done); the status bar shows this number. */
+  openCount: number
 }
 
 export type TapdComment = { author: string; created: string; text: string }

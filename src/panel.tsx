@@ -64,12 +64,6 @@ const detail = atom<DetailState | null>(null)
 const dispatch = atom<DispatchState>({ phase: 'idle' })
 const live = atom<{ fetchedAt: number; openCount: number } | null>(null)
 
-function openCountOf(result: TapdListResult): number {
-  return result.counts
-    .filter((count) => count.status !== 'closed')
-    .reduce((total, count) => total + count.count, 0)
-}
-
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
@@ -80,7 +74,7 @@ async function refresh(silent = false): Promise<void> {
     const result = await plugin.request('tapd.list', { force: true })
     set(state, { phase: 'ready', result })
     if (result.fetchedAt) {
-      set(live, { fetchedAt: result.fetchedAt, openCount: openCountOf(result) })
+      set(live, { fetchedAt: result.fetchedAt, openCount: result.openCount })
     }
     if (result.reason === 'not_configured') set(configOpen, true)
   } catch (error) {

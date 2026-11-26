@@ -74,7 +74,8 @@ const READY: TapdListResult = {
     { kind: 'story', status: 'status_2', label: '产品体验', count: 1 },
     { kind: 'bug', status: 'new', label: '新', count: 1 },
     { kind: 'story', status: 'planning', label: '规划中', count: 1 }
-  ]
+  ],
+  openCount: 4
 }
 
 const NO_TOKEN: TapdListResult = {
