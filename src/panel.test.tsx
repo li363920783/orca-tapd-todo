@@ -122,13 +122,19 @@ function detailFor(input: unknown): TapdDetailResult {
   return kind === 'story' ? STORY_DETAIL : BUG_DETAIL
 }
 
-function readyHost(): MockHost {
+function readyHost(settings: Record<string, unknown> = {}): MockHost {
   return mockHost({
     requests: {
       'tapd.list': () => READY,
       'tapd.detail': detailFor
     },
-    settings: { workspaceId: '12345678', owner: '测试用户', onlyOpen: true }
+    settings: {
+      workspaceId: '12345678',
+      owner: '测试用户',
+      onlyOpen: true,
+      dispatchWorkspace: 'path:/Users/you/projects/your-repo',
+      ...settings
+    }
   })
 }
 
@@ -174,6 +180,35 @@ test('stacks type, status, priority and keyword filters', async () => {
   await view.unmount()
 })
 
+test('status chips filter by kind and status, toggle off, and clear with 全部', async () => {
+  const view = await mount(panel, { host: readyHost() })
+
+  await view.press({ text: '已解决 1' })
+  assert.equal(view.findAll({ type: 'ListItem' }).length, 1)
+  assert.ok(view.find({ text: /示例缺陷：页面一直加载中/ }))
+  assert.equal(view.valueOf({ label: '类型' }), 'bug')
+  assert.equal(view.valueOf({ label: '状态' }), '已解决')
+  assert.equal(view.find({ text: '已解决 1', type: 'Button' })?.props['variant'], 'solid')
+  assert.equal(view.find({ text: '全部', type: 'Button' })?.props['variant'], 'ghost')
+
+  // Clicking the same chip clears only the status; the kind stays on bug.
+  await view.press({ text: '已解决 1' })
+  assert.equal(view.findAll({ type: 'ListItem' }).length, 2)
+  assert.equal(view.valueOf({ label: '状态' }), 'all')
+  assert.equal(view.valueOf({ label: '类型' }), 'bug')
+  assert.equal(view.find({ text: '已解决 1', type: 'Button' })?.props['variant'], 'ghost')
+
+  await view.press({ text: '全部', type: 'Button' })
+  assert.equal(view.findAll({ type: 'ListItem' }).length, 4)
+  assert.equal(view.valueOf({ label: '类型' }), 'all')
+  assert.equal(view.valueOf({ label: '状态' }), 'all')
+  assert.equal(view.find({ text: '全部', type: 'Button' })?.props['variant'], 'solid')
+
+  assert.deepEqual(view.errors, [])
+  assert.deepEqual(view.refusals, [])
+  await view.unmount()
+})
+
 test('opens a work item in-panel, then returns to the list', async () => {
   const host = readyHost()
   const view = await mount(panel, { host })
@@ -210,11 +245,20 @@ test('dispatches from the detail view and shows the session', async () => {
         return { ok: true, sessionId: 'abcdef12-3456-7890' }
       }
     },
-    settings: { workspaceId: '12345678', owner: '测试用户', onlyOpen: true }
+    settings: {
+      workspaceId: '12345678',
+      owner: '测试用户',
+      onlyOpen: true,
+      dispatchWorkspace: 'path:/Users/you/projects/your-repo'
+    }
   })
   const view = await mount(panel, { host })
 
   await view.press({ text: /示例需求：视频消息增加独立 loading/ })
+  await view.settled()
+  const idleButton = view.find({ text: '一键派单', type: 'Button' })
+  assert.ok(idleButton)
+  assert.equal(idleButton.disabled, false)
   await view.press({ text: '一键派单' })
 
   assert.deepEqual(dispatchedWith, {
@@ -229,6 +273,66 @@ test('dispatches from the detail view and shows the session', async () => {
   assert.ok(button)
   assert.equal(button.disabled, true)
 
+  const dispatchCall = host.calls.find(
+    (call) => call.method === 'plugin.request' && (call.params as { name?: string }).name === 'tapd.dispatch'
+  )
+  assert.ok(dispatchCall)
+  assert.equal((dispatchCall.params as { timeoutMs?: number }).timeoutMs, 120_000)
+
+  assert.deepEqual(view.errors, [])
+  assert.deepEqual(view.refusals, [])
+  await view.unmount()
+})
+
+test('warns and disables dispatch when no target workspace is configured', async () => {
+  const view = await mount(panel, { host: readyHost({ dispatchWorkspace: '' }) })
+
+  await view.press({ text: /示例缺陷：页面一直加载中/ })
+  await view.settled()
+
+  assert.ok(view.find({ text: /未配置派单目标工作区/ }))
+  assert.ok(
+    view.find({ text: /Settings → Plugins → TAPD 待办 → 派单目标工作区/ })
+  )
+  assert.equal(view.find({ type: 'Callout' })?.props['tone'], 'warning')
+  const button = view.find({ text: '一键派单', type: 'Button' })
+  assert.ok(button)
+  assert.equal(button.disabled, true)
+
+  assert.deepEqual(view.errors, [])
+  assert.deepEqual(view.refusals, [])
+  await view.unmount()
+})
+
+test('shows the worker CLI error verbatim when dispatch fails', async () => {
+  const host = mockHost({
+    requests: {
+      'tapd.list': () => READY,
+      'tapd.detail': detailFor,
+      'tapd.dispatch': () => ({
+        ok: false,
+        message:
+          '派单失败：selector_not_found: selector_not_found；selector: path:/nonexistent；validSelectorForms: path:<absolute-path>; name:<display-name>'
+      })
+    },
+    settings: {
+      workspaceId: '12345678',
+      owner: '测试用户',
+      onlyOpen: true,
+      dispatchWorkspace: 'path:/nonexistent'
+    }
+  })
+  const view = await mount(panel, { host })
+
+  await view.press({ text: /示例缺陷：页面一直加载中/ })
+  await view.settled()
+  await view.press({ text: '一键派单' })
+
+  assert.ok(view.find({ text: /selector_not_found/ }))
+  assert.ok(view.find({ text: /validSelectorForms/ }))
+  assert.ok(view.find({ text: /path:\/nonexistent/ }))
+  assert.equal(view.find({ text: '已派单' }), null)
+
   assert.deepEqual(view.errors, [])
   assert.deepEqual(view.refusals, [])
   await view.unmount()
@@ -237,7 +341,12 @@ test('dispatches from the detail view and shows the session', async () => {
 test('shows 已派单 when the item was dispatched in an earlier run', async () => {
   const host = mockHost({
     requests: { 'tapd.list': () => READY, 'tapd.detail': detailFor },
-    settings: { workspaceId: '12345678', owner: '测试用户', onlyOpen: true },
+    settings: {
+      workspaceId: '12345678',
+      owner: '测试用户',
+      onlyOpen: true,
+      dispatchWorkspace: 'path:/Users/you/projects/your-repo'
+    },
     storage: {
       'dispatched:bug:1112345678001000513': { sessionId: 'old-session-1', at: 1 }
     }

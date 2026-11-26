@@ -452,6 +452,53 @@ test('dispatches once, then reuses the stored session', async () => {
     assert.equal(second.sessionId, 'session-abcdef-123456')
     assert.equal(second.reused, true)
     assert.equal(calls.length, 1)
+    assert.ok(
+      worker.logs.includes(
+        'dispatch start bug:1112345678001000513 workspace=path:/root/projects/demo'
+      )
+    )
+    assert.ok(worker.logs.includes('dispatch ok session=session-abcdef-123456'))
+    await worker.deactivate()
+  } finally {
+    main.setDispatchExec(undefined)
+    globalThis.fetch = realFetch
+  }
+})
+
+test('shows the CLI error code and selector forms when launch fails', async () => {
+  stubFetch(tapdAnswer)
+  main.setDispatchExec(async () => ({
+    stdout: JSON.stringify({
+      ok: false,
+      error: {
+        code: 'selector_not_found',
+        message: 'selector_not_found',
+        data: {
+          selector: 'path:/nonexistent',
+          validSelectorForms: ['path:<absolute-path>', 'name:<display-name>']
+        }
+      }
+    }),
+    stderr: ''
+  }))
+  try {
+    const worker = await mountWorker(main, { host: contextHost() })
+    const result = await worker.request('tapd.dispatch', {
+      kind: 'bug',
+      id: '1112345678001000513',
+      title: '示例缺陷：页面一直加载中',
+      link: 'https://www.tapd.cn/12345678/bugtrace/bugs/view/1112345678001000513'
+    })
+    assert.equal(result.ok, false)
+    assert.match(result.message ?? '', /selector_not_found: selector_not_found/)
+    assert.match(result.message ?? '', /selector: path:\/nonexistent/)
+    assert.match(
+      result.message ?? '',
+      /validSelectorForms: path:<absolute-path>; name:<display-name>/
+    )
+    assert.ok(
+      worker.logs.some((line) => line.startsWith('dispatch failed: selector_not_found'))
+    )
     await worker.deactivate()
   } finally {
     main.setDispatchExec(undefined)
@@ -519,6 +566,9 @@ test('returns the CLI stderr when dispatch fails', async () => {
     })
     assert.equal(result.ok, false)
     assert.match(result.message ?? '', /worktree path:\/root\/projects\/demo not found/)
+    assert.ok(
+      worker.logs.some((line) => line.startsWith('dispatch failed: worktree path:'))
+    )
     await worker.deactivate()
   } finally {
     main.setDispatchExec(undefined)

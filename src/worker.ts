@@ -538,10 +538,26 @@ function readSessionId(value: unknown): string {
 function readCliError(value: unknown): string {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return ''
   const error = (value as Record<string, unknown>)['error']
-  if (error && typeof error === 'object' && !Array.isArray(error)) {
-    return text((error as Record<string, unknown>)['message'], '')
+  if (!error || typeof error !== 'object' || Array.isArray(error)) return ''
+  const record = error as Record<string, unknown>
+  const code = text(record['code'], '')
+  const message = text(record['message'], '')
+  const head = [code, message].filter(Boolean).join(': ')
+  const extras: string[] = []
+  const data = record['data']
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    for (const [key, field] of Object.entries(data as Record<string, unknown>)) {
+      if (typeof field === 'string' && field.trim()) {
+        extras.push(`${key}: ${field.trim()}`)
+      } else if (Array.isArray(field)) {
+        const values = field.filter(
+          (entry): entry is string => typeof entry === 'string' && entry.trim() !== ''
+        )
+        if (values.length > 0) extras.push(`${key}: ${values.join('; ')}`)
+      }
+    }
   }
-  return ''
+  return [head, ...extras].filter(Boolean).join('；')
 }
 
 async function dispatchItem(
@@ -554,10 +570,10 @@ async function dispatchItem(
   const agent = text(settings['dispatchAgent'], 'claude')
   const model = text(settings['dispatchModel'], '')
   if (!workspace) {
-    return {
-      ok: false,
-      message: '先在设置里填写「派单目标工作区」（如 path:/root/projects/your-repo），并确认它已在 Orca 中打开'
-    }
+    const message =
+      '先在设置里填写「派单目标工作区」（如 path:/root/projects/your-repo），并确认它已在 Orca 中打开'
+    orca.log(`dispatch failed: ${message}`)
+    return { ok: false, message }
   }
 
   const key = `dispatched:${input.kind}:${input.id}`
@@ -567,6 +583,7 @@ async function dispatchItem(
     if (typeof sessionId === 'string' && sessionId) return { ok: true, sessionId, reused: true }
   }
 
+  orca.log(`dispatch start ${input.kind}:${input.id} workspace=${workspace}`)
   const detail = await loadDetail(orca, input.kind, input.id, signal)
   const prompt = buildPrompt(input, detail)
   const args = [
@@ -595,10 +612,19 @@ async function dispatchItem(
     const failure = error as { stdout?: unknown; stderr?: unknown }
     const stderrText = text(failure.stderr, '')
     const stdoutText = text(failure.stdout, '')
+    let parsedFailure: unknown = null
+    try {
+      parsedFailure = JSON.parse(stdoutText)
+    } catch {
+      // Not JSON: the raw output is shown below.
+    }
+    const readable = readCliError(parsedFailure)
     const message =
-      [stderrText, stdoutText].filter(Boolean).join('\n') ||
+      [readable, stderrText, readable ? '' : stdoutText].filter(Boolean).join('\n') ||
       (error instanceof Error ? error.message : String(error))
-    return { ok: false, message: `派单失败：${message}` }
+    const full = `派单失败：${message}`
+    orca.log(`dispatch failed: ${message}`)
+    return { ok: false, message: full }
   }
 
   let parsed: unknown = null
@@ -610,14 +636,14 @@ async function dispatchItem(
   const sessionId = readSessionId(parsed)
   if (!sessionId) {
     const reason = readCliError(parsed)
-    const raw = [reason, stderr, stdout].filter(Boolean).join('\n')
-    return {
-      ok: false,
-      message: `Orca CLI 没有返回会话 ID${raw ? `：${raw}` : '（无输出）'}`
-    }
+    const message =
+      [reason, stderr, reason ? '' : stdout].filter(Boolean).join('\n') || '（无输出）'
+    orca.log(`dispatch failed: ${message}`)
+    return { ok: false, message: `派单失败：${message}` }
   }
 
   await orca.storage.set(key, { sessionId, at: Date.now() }).catch(() => undefined)
+  orca.log(`dispatch ok session=${sessionId}`)
   return { ok: true, sessionId }
 }
 

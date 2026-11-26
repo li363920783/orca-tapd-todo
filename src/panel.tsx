@@ -62,6 +62,7 @@ const configOpen = atom(false)
 const filters = atom<Filters>({ kind: 'all', status: 'all', priority: 'all', keyword: '' })
 const detail = atom<DetailState | null>(null)
 const dispatch = atom<DispatchState>({ phase: 'idle' })
+const dispatchReady = atom<boolean | null>(null)
 const live = atom<{ fetchedAt: number; openCount: number } | null>(null)
 
 function messageOf(error: unknown): string {
@@ -135,9 +136,20 @@ async function rememberDispatch(item: TapdItem): Promise<void> {
   }
 }
 
+async function loadDispatchConfig(): Promise<void> {
+  try {
+    const { settings } = await host.call('settings.get')
+    set(dispatchReady, String(settings['dispatchWorkspace'] ?? '').trim() !== '')
+  } catch {
+    set(dispatchReady, false)
+  }
+}
+
 async function openDetail(item: TapdItem): Promise<void> {
   set(detail, { phase: 'loading', item })
   set(dispatch, { phase: 'idle' })
+  set(dispatchReady, null)
+  void loadDispatchConfig()
   void rememberDispatch(item)
   try {
     const result = await plugin.request('tapd.detail', { kind: item.kind, id: item.id })
@@ -155,12 +167,16 @@ function closeDetail(): void {
 async function dispatchItem(item: TapdItem): Promise<void> {
   set(dispatch, { phase: 'sending' })
   try {
-    const result = await plugin.request('tapd.dispatch', {
-      kind: item.kind,
-      id: item.id,
-      title: item.title,
-      link: item.link
-    })
+    const result = await plugin.request(
+      'tapd.dispatch',
+      {
+        kind: item.kind,
+        id: item.id,
+        title: item.title,
+        link: item.link
+      },
+      { timeoutMs: 120_000 }
+    )
     if (result.ok && result.sessionId) {
       set(dispatch, { phase: 'done', sessionId: result.sessionId, reused: result.reused === true })
     } else {
@@ -234,6 +250,7 @@ function DetailView(): OrcaNode {
   const current = read(detail)
   if (current === null) return null
   const dispatchState = read(dispatch)
+  const ready = read(dispatchReady)
   const result = current.phase === 'ready' ? current.result : null
   const sending = dispatchState.phase === 'sending'
   const done = dispatchState.phase === 'done'
@@ -291,6 +308,12 @@ function DetailView(): OrcaNode {
             </Stack>
           ) : null}
 
+          {ready === false ? (
+            <Callout tone="warning" title="未配置派单目标工作区">
+              Settings → Plugins → TAPD 待办 → 派单目标工作区
+            </Callout>
+          ) : null}
+
           <Row gap="sm" wrap align="center">
             <Button
               variant="outline"
@@ -299,7 +322,7 @@ function DetailView(): OrcaNode {
               在 TAPD 打开
             </Button>
             <Button
-              disabled={sending || done}
+              disabled={sending || done || ready !== true}
               onPress={() => void dispatchItem(current.item)}
             >
               {done ? '已派单' : '一键派单'}
@@ -361,11 +384,43 @@ export default function Panel() {
         <Stack gap="md">
           {result && result.counts.length > 0 ? (
             <Row gap="xs" wrap>
-              {result.counts.map((count) => (
-                <Badge key={`${count.kind}:${count.status}`} tone={kindTone(count.kind)}>
-                  {`${count.label} ${count.count}`}
-                </Badge>
-              ))}
+              <Button
+                size="xs"
+                variant={
+                  currentFilters.status === 'all' && currentFilters.kind === 'all'
+                    ? 'solid'
+                    : 'ghost'
+                }
+                tone="neutral"
+                onPress={() =>
+                  set(filters, { ...read(filters), status: 'all', kind: 'all' })
+                }
+              >
+                全部
+              </Button>
+              {result.counts.map((count) => {
+                const selected =
+                  currentFilters.status === count.label && currentFilters.kind === count.kind
+                return (
+                  <Button
+                    key={`${count.kind}:${count.status}`}
+                    size="xs"
+                    variant={selected ? 'solid' : 'ghost'}
+                    tone={statusTone(count.status)}
+                    onPress={() => {
+                      const current = read(filters)
+                      const isSame = current.status === count.label && current.kind === count.kind
+                      set(filters, {
+                        ...current,
+                        status: isSame ? 'all' : count.label,
+                        kind: isSame ? current.kind : count.kind
+                      })
+                    }}
+                  >
+                    {`${count.label} ${count.count}`}
+                  </Button>
+                )
+              })}
             </Row>
           ) : null}
 
