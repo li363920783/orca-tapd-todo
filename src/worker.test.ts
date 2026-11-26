@@ -160,6 +160,35 @@ function contextHost() {
   })
 }
 
+test('updates the status bar and posts tapd.changed on the first poll', async () => {
+  stubFetch(tapdAnswer)
+  main.setPollingEnabled(true)
+  try {
+    const host = contextHost()
+    const worker = await mountWorker(main, { host })
+    for (let attempt = 0; attempt < 1000 && worker.posts.length === 0; attempt += 1) {
+      await Promise.resolve()
+    }
+
+    const statusCalls = host.callsOf('statusBar.update')
+    assert.equal(statusCalls.length, 1)
+    assert.deepEqual(statusCalls[0], {
+      id: 'tapd-pending',
+      text: 'TAPD 4',
+      tone: 'warning',
+      tooltip: '未关闭 4 条'
+    })
+    assert.equal(worker.posts.length, 1)
+    assert.equal(worker.posts[0]?.event, 'tapd.changed')
+    const payload = worker.posts[0]?.payload as { openCount?: number } | undefined
+    assert.equal(payload?.openCount, 4)
+    await worker.deactivate()
+  } finally {
+    main.setPollingEnabled(false)
+    globalThis.fetch = realFetch
+  }
+})
+
 test('merges bugs and stories, newest change first, with status_map labels', async () => {
   const urls = stubFetch(tapdAnswer)
   try {
