@@ -2,10 +2,10 @@
   "manifestVersion": 2,
   "id": "tapd-todo",
   "name": "TAPD 待办",
-  "version": "0.2.0",
-  "description": "在 Orca 右栏查看指派给我的 TAPD 缺陷（bug），点开直达 TAPD 详情。View TAPD bugs assigned to you in Orca, with one-click open in TAPD.",
+  "version": "0.3.0",
+  "description": "在 Orca 右栏查看指派给你的 TAPD 缺陷与需求，筛选、看详情，并一键派给 Orca agent。View TAPD bugs and stories assigned to you in Orca: filter, read details, and dispatch one to an agent.",
   "engines": {
-    "orca": ">=1.4.246"
+    "orca": ">=1.4.248"
   },
   "execution": "trusted-worker",
   "pluginApi": 1,
@@ -18,6 +18,15 @@
         "icon": "bug",
         "entry": "src/panel.tsx",
         "ui": "components"
+      }
+    ],
+    "statusBarItems": [
+      {
+        "id": "tapd-pending",
+        "icon": "bug",
+        "text": "TAPD",
+        "tone": "neutral",
+        "tooltip": "TAPD 待办"
       }
     ],
     "settings": [
@@ -46,6 +55,34 @@
         "default": 100,
         "minimum": 1,
         "maximum": 200
+      },
+      {
+        "key": "pollMinutes",
+        "title": "状态栏轮询间隔（分钟）",
+        "type": "integer",
+        "default": 5,
+        "minimum": 1,
+        "maximum": 60
+      },
+      {
+        "key": "dispatchWorkspace",
+        "title": "派单目标工作区",
+        "type": "string",
+        "placeholder": "path:/root/projects/your-repo",
+        "description": "必须是已在 Orca 中存在的工作区；填写传给 `orca agent launch --worktree` 的选择器"
+      },
+      {
+        "key": "dispatchAgent",
+        "title": "派单 Agent",
+        "type": "string",
+        "default": "claude",
+        "description": "已安装的 Orca agent 名称，如 claude、codex、omp"
+      },
+      {
+        "key": "dispatchModel",
+        "title": "派单模型（可空）",
+        "type": "string",
+        "description": "可选，传给 `orca agent launch --model`"
       }
     ]
   },
