@@ -1,0 +1,69 @@
+{
+  "manifestVersion": 2,
+  "id": "tapd-todo",
+  "name": "TAPD 待办",
+  "version": "0.2.0",
+  "description": "在 Orca 右栏查看指派给我的 TAPD 缺陷（bug），点开直达 TAPD 详情。View TAPD bugs assigned to you in Orca, with one-click open in TAPD.",
+  "engines": {
+    "orca": ">=1.4.246"
+  },
+  "execution": "trusted-worker",
+  "pluginApi": 1,
+  "main": "src/worker.ts",
+  "contributes": {
+    "panels": [
+      {
+        "id": "tapd",
+        "title": "TAPD 待办",
+        "icon": "bug",
+        "entry": "src/panel.tsx",
+        "ui": "components"
+      }
+    ],
+    "settings": [
+      {
+        "key": "workspaceId",
+        "title": "TAPD 项目 ID",
+        "type": "string",
+        "placeholder": "12345678"
+      },
+      {
+        "key": "owner",
+        "title": "负责人",
+        "type": "string",
+        "description": "按 TAPD「当前处理人」精确匹配，支持多人时用分号分隔"
+      },
+      {
+        "key": "onlyOpen",
+        "title": "只显示未关闭",
+        "type": "boolean",
+        "default": true
+      },
+      {
+        "key": "limit",
+        "title": "最多条数",
+        "type": "integer",
+        "default": 100,
+        "minimum": 1,
+        "maximum": 200
+      }
+    ]
+  },
+  "capabilities": [
+    {
+      "kind": "storage:own"
+    },
+    {
+      "kind": "secrets:own"
+    },
+    {
+      "kind": "settings:own"
+    }
+  ],
+  "license": "MIT",
+  "author": {
+    "name": "Morin Li",
+    "url": "https://github.com/li363920783"
+  },
+  "repository": "https://github.com/li363920783/orca-tapd-todo"
+}
