@@ -4,7 +4,7 @@
 筛选后可直接读详情，并把单子一键派给 Orca agent。
 
 - **缺陷 + 需求**：并行读取两类工作项，按 `modified desc` 合并排序；缺陷红色、需求蓝色区分
-- **多条件筛选**：类型 / 状态 / 优先级 / 标题关键字，全部叠加
+- **多条件筛选**：类型 / 状态 / 优先级 / 标题关键字，全部叠加；顶部状态计数是筛选 chip，点一下按该类型 + 状态过滤，再点取消
 - **插件内详情**：状态、优先级、处理人、创建人、时间、Markdown 描述和评论；保留「在 TAPD 打开」
 - **状态栏常驻**：`TAPD N`（N = 未关闭待办数），worker 按设置的间隔轮询更新
 - **一键派单**：把单号、标题、链接、状态、优先级和描述摘要组成 prompt，用 Orca CLI 在**已存在的**
@@ -50,7 +50,7 @@ orca plugin dev load .
 | `onlyOpen` | `true` | 拉取用 `status != closed`，再按类型终态过滤：缺陷排除 `closed`/`rejected`，需求排除 `resolved`/`rejected`/`closed`/`done` |
 | `limit` | `100` | 合并后的最多显示条数（1–200）；每类最多从 TAPD 拉 200 条 |
 | `pollMinutes` | `5` | 状态栏轮询间隔（1–60 分钟） |
-| `dispatchWorkspace` | 空 | 派单目标工作区选择器，如 `path:/root/projects/your-repo` |
+| `dispatchWorkspace` | 空 | 派单目标工作区选择器，如 `path:/Users/you/projects/your-repo` |
 | `dispatchAgent` | `claude` | 已安装的 Orca agent 名称 |
 | `dispatchModel` | 空 | 可选，传给 `orca agent launch --model` |
 
@@ -68,8 +68,9 @@ orca plugin dev load .
 前置条件：
 
 - 目标工作区**必须已经在 Orca 中存在**（不会自动新建 worktree）；
-- `dispatchWorkspace` 填的是 `orca agent launch --worktree` 接受的选择器：
-  `path:/...`、`name:<显示名>`、`branch:<分支>`、`active` 等；
+- `dispatchWorkspace` 填的是 `orca agent launch --worktree` 接受的选择器，例如
+  `path:/Users/you/projects/your-repo`、`name:<显示名>`、`branch:<分支>`、`active` 等；
+- 详情页会先读设置：`dispatchWorkspace` 为空时按钮禁用并提示去 Settings → Plugins 配置；
 - 目标 agent 已在这台 Orca 上安装，并支持以 chat 方式启动。
 
 派单会读取该单详情，生成固定格式的中文 prompt（单号 / 类型 / 标题 / 链接 / 状态 / 优先级 /
@@ -80,10 +81,11 @@ orca agent launch --agent <agent> --worktree <workspace> --prompt <prompt> --sur
 # 配置了 dispatchModel 时追加：--model <model>
 ```
 
-CLI 二进制取 `ORCA_CLI_COMMAND` 环境变量，未设置时用 `orca`。成功时把
+CLI 二进制取 `ORCA_CLI_COMMAND` 环境变量，未设置时用 `orca`。面板请求超时设为 120 秒（CLI 启动可能超过默认 30 秒）。成功时把
 `result.outcome.sessionId` 返回给面板，并在插件 storage 里记下
 `dispatched:<kind>:<id>`；同一单重复点击不会再次启动 agent，详情页按钮显示「已派单」。
-失败时把 CLI 的 stderr/stdout 原文显示在 panel 里。
+失败时把 CLI 错误的 `code: message` 及 `error.data`（如 `validSelectorForms`）连同 stderr/stdout 原文显示在 panel 里；
+worker 日志记录 `dispatch start` / `dispatch ok` / `dispatch failed`（不含令牌）。
 
 ## 权限说明
 
