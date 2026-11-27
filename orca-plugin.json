@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "tapd-todo",
   "name": "TAPD 待办",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "在 Orca 右栏查看指派给你的 TAPD 缺陷与需求，筛选、看详情，并一键派给 Orca agent。View TAPD bugs and stories assigned to you in Orca: filter, read details, and dispatch one to an agent.",
   "engines": {
     "orca": ">=1.4.248"

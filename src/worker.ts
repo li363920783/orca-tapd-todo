@@ -14,6 +14,7 @@ import type {
   TapdKind,
   TapdListResult,
   TapdStatusCount,
+  TapdWorkspaceError,
   TapdWorkspaceOption,
   TapdWorkspacesResult
 } from './protocol'
@@ -564,6 +565,18 @@ function readCliError(value: unknown): string {
 }
 
 type WorkspaceCache = { at: number; workspaces: TapdWorkspaceOption[] }
+type WorkspaceListOutcome = { workspaces: TapdWorkspaceOption[]; error?: TapdWorkspaceError }
+
+function hostErrorOf(error: unknown): TapdWorkspaceError {
+  const code =
+    error && typeof error === 'object' && typeof (error as { code?: unknown }).code === 'string'
+      ? (error as { code: string }).code
+      : 'action_failed'
+  return {
+    code,
+    message: error instanceof Error ? error.message : String(error)
+  }
+}
 
 function workspaceLabel(path: string, name: string): string {
   if (name) return name
@@ -575,7 +588,7 @@ function workspaceLabel(path: string, name: string): string {
 async function listWorkspaces(
   orca: OrcaWorkerApi,
   force: boolean
-): Promise<TapdWorkspaceOption[]> {
+): Promise<WorkspaceListOutcome> {
   const key = 'workspaces:list'
   if (!force) {
     const cached = await orca.storage.get(key).catch(() => null)
@@ -584,9 +597,10 @@ async function listWorkspaces(
       if (
         typeof entry.at === 'number' &&
         Date.now() - entry.at < WORKSPACE_CACHE_TTL_MS &&
-        Array.isArray(entry.workspaces)
+        Array.isArray(entry.workspaces) &&
+        entry.workspaces.length > 0
       ) {
-        return entry.workspaces
+        return { workspaces: entry.workspaces }
       }
     }
   }
@@ -605,13 +619,15 @@ async function listWorkspaces(
           hostId: text(entry.hostId, '')
         }
       })
-    await orca.storage.set(key, { at: Date.now(), workspaces }).catch(() => undefined)
-    return workspaces
+    // Failures and empty lists are not cached: the next open/refresh must ask again.
+    if (workspaces.length > 0) {
+      await orca.storage.set(key, { at: Date.now(), workspaces }).catch(() => undefined)
+    }
+    return { workspaces }
   } catch (error) {
-    orca.log(
-      `workspace.list failed: ${error instanceof Error ? error.message : String(error)}`
-    )
-    return []
+    const failure = hostErrorOf(error)
+    orca.log(`workspace.list failed: ${failure.code}: ${failure.message}`)
+    return { workspaces: [], error: failure }
   }
 }
 
@@ -632,11 +648,13 @@ async function workspacesForPanel(
 ): Promise<TapdWorkspacesResult> {
   const settings = await orca.settings.get()
   const workspaceId = text(settings['workspaceId'], '')
-  const [workspaces, target] = await Promise.all([
+  const [listed, target] = await Promise.all([
     listWorkspaces(orca, force),
     dispatchTarget(orca, workspaceId, settings)
   ])
-  return { workspaces, target }
+  return listed.error
+    ? { workspaces: listed.workspaces, target, error: listed.error }
+    : { workspaces: listed.workspaces, target }
 }
 
 async function dispatchItem(

@@ -33,6 +33,7 @@ import type {
   TapdItem,
   TapdKind,
   TapdListResult,
+  TapdWorkspaceError,
   TapdWorkspaceOption
 } from './protocol'
 import type { OrcaNode } from 'orca'
@@ -55,8 +56,8 @@ type DispatchState =
 
 type WorkspaceState =
   | { phase: 'loading' }
-  | { phase: 'ready'; options: TapdWorkspaceOption[]; target: string }
-  | { phase: 'error'; message: string }
+  | { phase: 'ready'; options: TapdWorkspaceOption[]; error: TapdWorkspaceError | null }
+  | { phase: 'error'; error: TapdWorkspaceError }
 
 type Filters = { kind: 'all' | TapdKind; status: string; priority: string; keyword: string }
 
@@ -143,23 +144,35 @@ async function rememberDispatch(item: TapdItem): Promise<void> {
   }
 }
 
-async function loadWorkspaces(item: TapdItem): Promise<void> {
+async function loadWorkspaces(item: TapdItem, force = false): Promise<void> {
   set(workspaceState, { phase: 'loading' })
   try {
-    const result = await plugin.request('tapd.workspaces', {})
+    const result = await plugin.request(
+      'tapd.workspaces',
+      force ? { force: true } : {}
+    )
     if (!stillShowing(item)) return
     set(workspaceState, {
       phase: 'ready',
       options: result.workspaces,
-      target: result.target
+      error: result.error ?? null
     })
     const known = result.workspaces.some((option) => option.selector === result.target)
     set(selectedWorkspace, known ? result.target : '')
   } catch (error) {
     if (!stillShowing(item)) return
-    set(workspaceState, { phase: 'error', message: messageOf(error) })
+    const code =
+      error && typeof error === 'object' && typeof (error as { code?: unknown }).code === 'string'
+        ? (error as { code: string }).code
+        : 'action_failed'
+    set(workspaceState, { phase: 'error', error: { code, message: messageOf(error) } })
     set(selectedWorkspace, '')
   }
+}
+
+function refreshWorkspaces(): void {
+  const current = read(detail)
+  if (current !== null) void loadWorkspaces(current.item, true)
 }
 
 async function openDetail(item: TapdItem): Promise<void> {
@@ -287,8 +300,10 @@ function DetailView(): OrcaNode {
   const state = read(workspaceState)
   const selected = read(selectedWorkspace)
   const options = state.phase === 'ready' ? state.options : []
+  const workspaceError =
+    state.phase === 'error' ? state.error : state.phase === 'ready' ? state.error : null
   const noWorkspace =
-    state.phase === 'error' || (state.phase === 'ready' && options.length === 0)
+    state.phase === 'ready' && state.error === null && options.length === 0
   const dispatchedLabel =
     dispatchState.phase === 'done'
       ? dispatchState.workspaceLabel ||
@@ -352,23 +367,44 @@ function DetailView(): OrcaNode {
             </Stack>
           ) : null}
 
-          {options.length > 0 ? (
-            <Select
-              label="派单到工作区"
-              value={selected}
-              options={options.map((option) => ({
-                value: option.selector,
-                label: `${option.label} — ${option.detail}`
-              }))}
-              onChange={(value) => set(selectedWorkspace, value)}
-            />
+          <Row gap="sm" align="end" wrap>
+            {options.length > 0 && workspaceError === null ? (
+              <Select
+                label="派单到工作区"
+                value={selected}
+                options={options.map((option) => ({
+                  value: option.selector,
+                  label: `${option.label} — ${option.detail}`
+                }))}
+                onChange={(value) => set(selectedWorkspace, value)}
+              />
+            ) : null}
+            <Button
+              size="sm"
+              variant="ghost"
+              icon="refresh"
+              disabled={state.phase === 'loading'}
+              onPress={refreshWorkspaces}
+            >
+              刷新工作区
+            </Button>
+          </Row>
+
+          {workspaceError ? (
+            <Callout tone="danger" title="读取 Orca 工作区失败">
+              <Stack gap="xs">
+                <Text size="xs">{`${workspaceError.code}: ${workspaceError.message}`}</Text>
+                <Text size="xs" muted>
+                  若为 capability_denied，请在 Settings → Plugins 重新批准本插件（0.3.2 新增
+                  workspace:read）
+                </Text>
+              </Stack>
+            </Callout>
           ) : null}
 
           {noWorkspace ? (
             <Callout tone="warning" title="没有可选的 Orca 工作区">
-              {state.phase === 'error'
-                ? state.message
-                : '先在 Orca 中打开一个工作区，再重新打开这张单的详情'}
+              Orca 里还没有打开的项目工作区：先在 Orca 打开一个项目/工作树，再点『刷新工作区』
             </Callout>
           ) : null}
 

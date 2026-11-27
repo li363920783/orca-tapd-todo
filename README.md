@@ -76,7 +76,7 @@ orca plugin dev load .
    `workspace.list` 列出所有带路径的工作区，并把选择记在 storage 的 `dispatchTarget:<TAPD 项目 ID>`。
 2. 下次打开同一 TAPD 项目的详情时会自动选中上次的选择；没有记忆时回退到设置里的
    `dispatchWorkspace`（默认派单工作区，可选）；两者都没有则按钮禁用，需要先选一个。
-3. 没有任何可选工作区时显示「没有可选的 Orca 工作区」，派单按钮禁用。
+3. 没有任何可选工作区时显示 warning 并禁用派单；读取工作区失败时显示 `code: message`，可点「刷新工作区」重试。
 4. 选中的 selector 形如 `path:/Users/you/projects/your-repo`，传给
    `orca agent launch --worktree`；也兼容 `name:<显示名>`、`branch:<分支>`、`active` 等选择器。
 
@@ -94,6 +94,16 @@ CLI 二进制取 `ORCA_CLI_COMMAND` 环境变量，未设置时用 `orca`。面�
 详情页按钮显示「已派单」。
 失败时把 CLI 错误的 `code: message` 及 `error.data`（如 `validSelectorForms`）连同 stderr/stdout 原文显示在 panel 里；
 worker 日志记录 `dispatch start` / `dispatch ok` / `dispatch failed`（不含令牌）。
+
+## 排查：没有可选工作区 / 权限不足
+
+- **「Orca 里还没有打开的项目工作区」**：先在 Orca 打开一个项目或工作树，再回详情页点「刷新工作区」。
+  v0.3.3 起空列表不写缓存，刷新会重新读取。
+- **「读取 Orca 工作区失败」+ `capability_denied`**：0.3.2 起插件需要 `workspace:read`。升级后到
+  `Settings → Plugins → TAPD 待办` 重新批准本插件（或禁用再启用），确认指纹后授权。
+- **其他 code**（`timeout` / `action_failed` / `not_permitted` 等）：面板显示原始 `code: message`；
+  先点「刷新工作区」，仍失败看 `orca plugin logs`。
+- 读取失败与空列表都不进入 60 秒缓存，修好权限或打开工作区后立即重试即可。
 
 ## 权限说明
 
