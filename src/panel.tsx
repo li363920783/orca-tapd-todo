@@ -32,7 +32,8 @@ import type {
   TapdDetailResult,
   TapdItem,
   TapdKind,
-  TapdListResult
+  TapdListResult,
+  TapdWorkspaceOption
 } from './protocol'
 import type { OrcaNode } from 'orca'
 
@@ -49,7 +50,12 @@ type DetailState =
 type DispatchState =
   | { phase: 'idle' }
   | { phase: 'sending' }
-  | { phase: 'done'; sessionId: string; reused: boolean }
+  | { phase: 'done'; sessionId: string; reused: boolean; workspaceLabel?: string }
+  | { phase: 'error'; message: string }
+
+type WorkspaceState =
+  | { phase: 'loading' }
+  | { phase: 'ready'; options: TapdWorkspaceOption[]; target: string }
   | { phase: 'error'; message: string }
 
 type Filters = { kind: 'all' | TapdKind; status: string; priority: string; keyword: string }
@@ -62,7 +68,8 @@ const configOpen = atom(false)
 const filters = atom<Filters>({ kind: 'all', status: 'all', priority: 'all', keyword: '' })
 const detail = atom<DetailState | null>(null)
 const dispatch = atom<DispatchState>({ phase: 'idle' })
-const dispatchReady = atom<boolean | null>(null)
+const workspaceState = atom<WorkspaceState>({ phase: 'loading' })
+const selectedWorkspace = atom('')
 const live = atom<{ fetchedAt: number; openCount: number } | null>(null)
 
 function messageOf(error: unknown): string {
@@ -136,20 +143,31 @@ async function rememberDispatch(item: TapdItem): Promise<void> {
   }
 }
 
-async function loadDispatchConfig(): Promise<void> {
+async function loadWorkspaces(item: TapdItem): Promise<void> {
+  set(workspaceState, { phase: 'loading' })
   try {
-    const { settings } = await host.call('settings.get')
-    set(dispatchReady, String(settings['dispatchWorkspace'] ?? '').trim() !== '')
-  } catch {
-    set(dispatchReady, false)
+    const result = await plugin.request('tapd.workspaces', {})
+    if (!stillShowing(item)) return
+    set(workspaceState, {
+      phase: 'ready',
+      options: result.workspaces,
+      target: result.target
+    })
+    const known = result.workspaces.some((option) => option.selector === result.target)
+    set(selectedWorkspace, known ? result.target : '')
+  } catch (error) {
+    if (!stillShowing(item)) return
+    set(workspaceState, { phase: 'error', message: messageOf(error) })
+    set(selectedWorkspace, '')
   }
 }
 
 async function openDetail(item: TapdItem): Promise<void> {
   set(detail, { phase: 'loading', item })
   set(dispatch, { phase: 'idle' })
-  set(dispatchReady, null)
-  void loadDispatchConfig()
+  set(workspaceState, { phase: 'loading' })
+  set(selectedWorkspace, '')
+  void loadWorkspaces(item)
   void rememberDispatch(item)
   try {
     const result = await plugin.request('tapd.detail', { kind: item.kind, id: item.id })
@@ -165,6 +183,16 @@ function closeDetail(): void {
 }
 
 async function dispatchItem(item: TapdItem): Promise<void> {
+  const workspace = read(selectedWorkspace)
+  if (!workspace) {
+    set(dispatch, { phase: 'error', message: '先在详情页选择派单工作区' })
+    return
+  }
+  const state = read(workspaceState)
+  const label =
+    state.phase === 'ready'
+      ? state.options.find((option) => option.selector === workspace)?.label ?? workspace
+      : workspace
   set(dispatch, { phase: 'sending' })
   try {
     const result = await plugin.request(
@@ -173,12 +201,18 @@ async function dispatchItem(item: TapdItem): Promise<void> {
         kind: item.kind,
         id: item.id,
         title: item.title,
-        link: item.link
+        link: item.link,
+        workspace
       },
       { timeoutMs: 120_000 }
     )
     if (result.ok && result.sessionId) {
-      set(dispatch, { phase: 'done', sessionId: result.sessionId, reused: result.reused === true })
+      set(dispatch, {
+        phase: 'done',
+        sessionId: result.sessionId,
+        reused: result.reused === true,
+        workspaceLabel: label
+      })
     } else {
       set(dispatch, { phase: 'error', message: result.message ?? '派单失败' })
     }
@@ -250,7 +284,17 @@ function DetailView(): OrcaNode {
   const current = read(detail)
   if (current === null) return null
   const dispatchState = read(dispatch)
-  const ready = read(dispatchReady)
+  const state = read(workspaceState)
+  const selected = read(selectedWorkspace)
+  const options = state.phase === 'ready' ? state.options : []
+  const noWorkspace =
+    state.phase === 'error' || (state.phase === 'ready' && options.length === 0)
+  const dispatchedLabel =
+    dispatchState.phase === 'done'
+      ? dispatchState.workspaceLabel ||
+        options.find((option) => option.selector === selected)?.label ||
+        selected
+      : ''
   const result = current.phase === 'ready' ? current.result : null
   const sending = dispatchState.phase === 'sending'
   const done = dispatchState.phase === 'done'
@@ -308,9 +352,23 @@ function DetailView(): OrcaNode {
             </Stack>
           ) : null}
 
-          {ready === false ? (
-            <Callout tone="warning" title="未配置派单目标工作区">
-              Settings → Plugins → TAPD 待办 → 派单目标工作区
+          {options.length > 0 ? (
+            <Select
+              label="派单到工作区"
+              value={selected}
+              options={options.map((option) => ({
+                value: option.selector,
+                label: `${option.label} — ${option.detail}`
+              }))}
+              onChange={(value) => set(selectedWorkspace, value)}
+            />
+          ) : null}
+
+          {noWorkspace ? (
+            <Callout tone="warning" title="没有可选的 Orca 工作区">
+              {state.phase === 'error'
+                ? state.message
+                : '先在 Orca 中打开一个工作区，再重新打开这张单的详情'}
             </Callout>
           ) : null}
 
@@ -322,7 +380,7 @@ function DetailView(): OrcaNode {
               在 TAPD 打开
             </Button>
             <Button
-              disabled={sending || done || ready !== true}
+              disabled={sending || done || selected === ''}
               onPress={() => void dispatchItem(current.item)}
             >
               {done ? '已派单' : '一键派单'}
@@ -332,7 +390,9 @@ function DetailView(): OrcaNode {
 
           {dispatchState.phase === 'done' ? (
             <Callout tone="success" title={dispatchState.reused ? '已派单（此前创建）' : '已派单'}>
-              {`会话 ${dispatchState.sessionId.slice(0, 8)} · 在 Orca 侧栏查看进度`}
+              {dispatchedLabel
+                ? `派到 ${dispatchedLabel} · 会话 ${dispatchState.sessionId.slice(0, 8)}`
+                : `会话 ${dispatchState.sessionId.slice(0, 8)} · 在 Orca 侧栏查看进度`}
             </Callout>
           ) : null}
           {dispatchState.phase === 'error' ? (

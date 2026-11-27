@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "tapd-todo",
   "name": "TAPD 待办",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "在 Orca 右栏查看指派给你的 TAPD 缺陷与需求，筛选、看详情，并一键派给 Orca agent。View TAPD bugs and stories assigned to you in Orca: filter, read details, and dispatch one to an agent.",
   "engines": {
     "orca": ">=1.4.248"
@@ -66,10 +66,10 @@
       },
       {
         "key": "dispatchWorkspace",
-        "title": "派单目标工作区",
+        "title": "默认派单工作区（可选）",
         "type": "string",
         "placeholder": "path:/root/projects/your-repo",
-        "description": "必须是已在 Orca 中存在的工作区；填写传给 `orca agent launch --worktree` 的选择器"
+        "description": "详情页选择的工作区会按 TAPD 项目记住，并覆盖此默认值"
       },
       {
         "key": "dispatchAgent",
@@ -95,6 +95,9 @@
     },
     {
       "kind": "settings:own"
+    },
+    {
+      "kind": "workspace:read"
     }
   ],
   "license": "MIT",
