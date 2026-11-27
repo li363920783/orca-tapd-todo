@@ -1,6 +1,6 @@
 // `orca plugin test .` runs this in Node with the same runtime and checks Orca uses.
 import { assert, mockHost, mount, test, type MockHost } from 'orca/testing'
-import type { TapdDetailResult, TapdListResult } from './protocol'
+import type { TapdDetailResult, TapdListResult, TapdWorkspacesResult } from './protocol'
 import * as panel from './panel'
 
 const READY: TapdListResult = {
@@ -117,6 +117,26 @@ const STORY_DETAIL: TapdDetailResult = {
   description: '需求说明\n视频加载完再允许打开'
 }
 
+const WORKSPACES: TapdWorkspacesResult = {
+  workspaces: [
+    {
+      selector: 'path:/Users/you/projects/alpha',
+      label: 'Alpha',
+      detail: '/Users/you/projects/alpha',
+      kind: 'worktree',
+      hostId: 'local'
+    },
+    {
+      selector: 'path:/Users/you/projects/beta',
+      label: 'Beta',
+      detail: '/Users/you/projects/beta',
+      kind: 'folder',
+      hostId: 'local'
+    }
+  ],
+  target: 'path:/Users/you/projects/alpha'
+}
+
 function detailFor(input: unknown): TapdDetailResult {
   const kind = (input as { kind?: string } | undefined)?.kind
   return kind === 'story' ? STORY_DETAIL : BUG_DETAIL
@@ -126,7 +146,8 @@ function readyHost(settings: Record<string, unknown> = {}): MockHost {
   return mockHost({
     requests: {
       'tapd.list': () => READY,
-      'tapd.detail': detailFor
+      'tapd.detail': detailFor,
+      'tapd.workspaces': () => WORKSPACES
     },
     settings: {
       workspaceId: '12345678',
@@ -243,7 +264,8 @@ test('dispatches from the detail view and shows the session', async () => {
       'tapd.dispatch': (input) => {
         dispatchedWith = input
         return { ok: true, sessionId: 'abcdef12-3456-7890' }
-      }
+      },
+      'tapd.workspaces': () => WORKSPACES
     },
     settings: {
       workspaceId: '12345678',
@@ -256,19 +278,35 @@ test('dispatches from the detail view and shows the session', async () => {
 
   await view.press({ text: /示例需求：视频消息增加独立 loading/ })
   await view.settled()
+
+  const select = view.find({ label: '派单到工作区' })
+  assert.ok(select)
+  assert.deepEqual(
+    (select.props['options'] as { label: string }[]).map((option) => option.label),
+    [
+      'Alpha — /Users/you/projects/alpha',
+      'Beta — /Users/you/projects/beta'
+    ]
+  )
+  assert.equal(view.valueOf({ label: '派单到工作区' }), 'path:/Users/you/projects/alpha')
   const idleButton = view.find({ text: '一键派单', type: 'Button' })
   assert.ok(idleButton)
   assert.equal(idleButton.disabled, false)
+
+  await view.select({ label: '派单到工作区' }, 'path:/Users/you/projects/beta')
+  assert.equal(view.find({ text: '一键派单', type: 'Button' })?.disabled, false)
   await view.press({ text: '一键派单' })
 
   assert.deepEqual(dispatchedWith, {
     kind: 'story',
     id: '1112345678001001019',
     title: '示例需求：视频消息增加独立 loading',
-    link: 'https://www.tapd.cn/12345678/prong/stories/view/1112345678001001019'
+    link: 'https://www.tapd.cn/12345678/prong/stories/view/1112345678001001019',
+    workspace: 'path:/Users/you/projects/beta'
   })
   assert.ok(view.find({ text: /已派单/ }))
   assert.ok(view.find({ text: /abcdef12/ }))
+  assert.ok(view.find({ text: /派到 Beta/ }))
   const button = view.find({ text: '已派单', type: 'Button' })
   assert.ok(button)
   assert.equal(button.disabled, true)
@@ -284,16 +322,21 @@ test('dispatches from the detail view and shows the session', async () => {
   await view.unmount()
 })
 
-test('warns and disables dispatch when no target workspace is configured', async () => {
-  const view = await mount(panel, { host: readyHost({ dispatchWorkspace: '' }) })
+test('disables dispatch and warns when there is no Orca workspace', async () => {
+  const host = mockHost({
+    requests: {
+      'tapd.list': () => READY,
+      'tapd.detail': detailFor,
+      'tapd.workspaces': () => ({ workspaces: [], target: '' })
+    },
+    settings: { workspaceId: '12345678', owner: '测试用户', onlyOpen: true }
+  })
+  const view = await mount(panel, { host })
 
   await view.press({ text: /示例缺陷：页面一直加载中/ })
   await view.settled()
 
-  assert.ok(view.find({ text: /未配置派单目标工作区/ }))
-  assert.ok(
-    view.find({ text: /Settings → Plugins → TAPD 待办 → 派单目标工作区/ })
-  )
+  assert.ok(view.find({ text: /没有可选的 Orca 工作区/ }))
   assert.equal(view.find({ type: 'Callout' })?.props['tone'], 'warning')
   const button = view.find({ text: '一键派单', type: 'Button' })
   assert.ok(button)
@@ -309,6 +352,7 @@ test('shows the worker CLI error verbatim when dispatch fails', async () => {
     requests: {
       'tapd.list': () => READY,
       'tapd.detail': detailFor,
+      'tapd.workspaces': () => WORKSPACES,
       'tapd.dispatch': () => ({
         ok: false,
         message:
@@ -340,7 +384,11 @@ test('shows the worker CLI error verbatim when dispatch fails', async () => {
 
 test('shows 已派单 when the item was dispatched in an earlier run', async () => {
   const host = mockHost({
-    requests: { 'tapd.list': () => READY, 'tapd.detail': detailFor },
+    requests: {
+      'tapd.list': () => READY,
+      'tapd.detail': detailFor,
+      'tapd.workspaces': () => WORKSPACES
+    },
     settings: {
       workspaceId: '12345678',
       owner: '测试用户',
@@ -359,6 +407,7 @@ test('shows 已派单 when the item was dispatched in an earlier run', async () 
   assert.ok(button)
   assert.equal(button.disabled, true)
   assert.ok(view.find({ text: /old-sess/ }))
+  assert.ok(view.find({ text: /派到 Alpha/ }))
 
   assert.deepEqual(view.errors, [])
   assert.deepEqual(view.refusals, [])

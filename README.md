@@ -7,8 +7,8 @@
 - **多条件筛选**：类型 / 状态 / 优先级 / 标题关键字，全部叠加；顶部状态计数是筛选 chip，点一下按该类型 + 状态过滤，再点取消
 - **插件内详情**：状态、优先级、处理人、创建人、时间、Markdown 描述和评论；保留「在 TAPD 打开」
 - **状态栏常驻**：`TAPD N`（N = 未关闭待办数），worker 按设置的间隔轮询更新
-- **一键派单**：把单号、标题、链接、状态、优先级和描述摘要组成 prompt，用 Orca CLI 在**已存在的**
-  目标工作区启动 agent（不建 worktree，不等待结果），返回 `sessionId`
+- **一键派单**：在详情页按次选择目标工作区（按 TAPD 项目记住上次选择），把单号、标题、链接、状态、优先级和
+  描述摘要组成 prompt，用 Orca CLI 在**已存在的**工作区启动 agent（不建 worktree，不等待结果），返回 `sessionId`
 - **令牌安全**：TAPD 个人访问令牌只存在本机 Orca 插件的加密 secrets，不进设置、不进仓库
 - **唯一外联**：`https://api.tapd.cn`
 
@@ -50,7 +50,7 @@ orca plugin dev load .
 | `onlyOpen` | `true` | 拉取用 `status != closed`，再按类型终态过滤：缺陷排除 `closed`/`rejected`，需求排除 `resolved`/`rejected`/`closed`/`done` |
 | `limit` | `100` | 合并后的最多显示条数（1–200）；每类最多从 TAPD 拉 200 条 |
 | `pollMinutes` | `5` | 状态栏轮询间隔（1–60 分钟） |
-| `dispatchWorkspace` | 空 | 派单目标工作区选择器，如 `path:/Users/you/projects/your-repo` |
+| `dispatchWorkspace` | 空 | 默认派单工作区（可选），如 `path:/Users/you/projects/your-repo`；详情页按项目记住的选择会覆盖它 |
 | `dispatchAgent` | `claude` | 已安装的 Orca agent 名称 |
 | `dispatchModel` | 空 | 可选，传给 `orca agent launch --model` |
 
@@ -68,10 +68,17 @@ orca plugin dev load .
 前置条件：
 
 - 目标工作区**必须已经在 Orca 中存在**（不会自动新建 worktree）；
-- `dispatchWorkspace` 填的是 `orca agent launch --worktree` 接受的选择器，例如
-  `path:/Users/you/projects/your-repo`、`name:<显示名>`、`branch:<分支>`、`active` 等；
-- 详情页会先读设置：`dispatchWorkspace` 为空时按钮禁用并提示去 Settings → Plugins 配置；
 - 目标 agent 已在这台 Orca 上安装，并支持以 chat 方式启动。
+
+派单流程：
+
+1. 打开任意工作项详情，在「派单到工作区」下拉框选择一个 Orca 工作区；worker 通过
+   `workspace.list` 列出所有带路径的工作区，并把选择记在 storage 的 `dispatchTarget:<TAPD 项目 ID>`。
+2. 下次打开同一 TAPD 项目的详情时会自动选中上次的选择；没有记忆时回退到设置里的
+   `dispatchWorkspace`（默认派单工作区，可选）；两者都没有则按钮禁用，需要先选一个。
+3. 没有任何可选工作区时显示「没有可选的 Orca 工作区」，派单按钮禁用。
+4. 选中的 selector 形如 `path:/Users/you/projects/your-repo`，传给
+   `orca agent launch --worktree`；也兼容 `name:<显示名>`、`branch:<分支>`、`active` 等选择器。
 
 派单会读取该单详情，生成固定格式的中文 prompt（单号 / 类型 / 标题 / 链接 / 状态 / 优先级 /
 描述摘要，并注明「先只读排查，给出根因和修复方案；不要直接改生产数据」），然后执行：
@@ -83,7 +90,8 @@ orca agent launch --agent <agent> --worktree <workspace> --prompt <prompt> --sur
 
 CLI 二进制取 `ORCA_CLI_COMMAND` 环境变量，未设置时用 `orca`。面板请求超时设为 120 秒（CLI 启动可能超过默认 30 秒）。成功时把
 `result.outcome.sessionId` 返回给面板，并在插件 storage 里记下
-`dispatched:<kind>:<id>`；同一单重复点击不会再次启动 agent，详情页按钮显示「已派单」。
+`dispatched:<kind>:<id>`，并把实际 selector 写入 `dispatchTarget:<TAPD 项目 ID>`；同一单重复点击不会再次启动 agent，
+详情页按钮显示「已派单」。
 失败时把 CLI 错误的 `code: message` 及 `error.data`（如 `validSelectorForms`）连同 stderr/stdout 原文显示在 panel 里；
 worker 日志记录 `dispatch start` / `dispatch ok` / `dispatch failed`（不含令牌）。
 
@@ -91,9 +99,10 @@ worker 日志记录 `dispatch start` / `dispatch ok` / `dispatch failed`（不�
 
 | 权限 | 用途 |
 |---|---|
-| `storage:own` | 状态标签缓存、已派单记录 |
+| `storage:own` | 状态标签缓存、工作区列表缓存、已派单记录、按项目记住的派单工作区 |
 | `secrets:own` | 加密保存 TAPD 个人访问令牌 |
-| `settings:own` | 读写项目 ID、负责人、轮询和派单设置 |
+| `settings:own` | 读写项目 ID、负责人、轮询和默认派单设置 |
+| `workspace:read` | 读取 Orca 工作区列表（名称、路径）用于派单选择 |
 
 Worker 是独立 Node 进程，以你的用户身份运行；除了 `api.tapd.cn` 和本机 `orca` CLI 不发任何请求。
 

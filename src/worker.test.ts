@@ -149,6 +149,38 @@ function detailAnswer(detail: unknown): StubAnswer {
       : tapdAnswer(url)
 }
 
+const WORKSPACES = {
+  workspaces: [
+    {
+      id: 'w1',
+      kind: 'worktree',
+      name: 'Alpha',
+      project: 'demo',
+      projectId: 'p1',
+      path: '/Users/you/projects/alpha',
+      branch: 'main',
+      hostId: 'local'
+    },
+    {
+      id: 'w2',
+      kind: 'folder',
+      name: '',
+      path: '/Users/you/projects/beta',
+      branch: null,
+      hostId: 'local'
+    },
+    {
+      id: 'w3',
+      kind: 'folder',
+      name: 'No Path',
+      path: '',
+      branch: null,
+      hostId: 'local'
+    }
+  ],
+  truncated: false
+}
+
 const realFetch = globalThis.fetch
 
 type StubAnswer = (url: URL) => { body: unknown; status?: number }
@@ -410,7 +442,8 @@ test('dispatches once, then reuses the stored session', async () => {
     }
   })
   try {
-    const worker = await mountWorker(main, { host: contextHost() })
+    const host = contextHost()
+    const worker = await mountWorker(main, { host })
     const first = await worker.request('tapd.dispatch', {
       kind: 'bug',
       id: '1112345678001000513',
@@ -458,10 +491,161 @@ test('dispatches once, then reuses the stored session', async () => {
       )
     )
     assert.ok(worker.logs.includes('dispatch ok session=session-abcdef-123456'))
+    assert.equal(
+      host.data().storage['dispatchTarget:12345678'],
+      'path:/root/projects/demo'
+    )
     await worker.deactivate()
   } finally {
     main.setDispatchExec(undefined)
     globalThis.fetch = realFetch
+  }
+})
+
+test('lists Orca workspaces, filters entries without a path and caches the result', async () => {
+  const host = mockHost({
+    settings: {
+      workspaceId: '12345678',
+      owner: '测试用户',
+      dispatchWorkspace: 'path:/Users/you/projects/alpha'
+    },
+    secrets: { token: 'test-token' },
+    storage: { 'dispatchTarget:12345678': 'path:/Users/you/projects/beta' },
+    results: { 'workspace.list': WORKSPACES }
+  })
+  const worker = await mountWorker(main, { host })
+  try {
+    const result = await worker.request('tapd.workspaces', {})
+    assert.deepEqual(result.workspaces, [
+      {
+        selector: 'path:/Users/you/projects/alpha',
+        label: 'Alpha',
+        detail: '/Users/you/projects/alpha',
+        kind: 'worktree',
+        hostId: 'local'
+      },
+      {
+        selector: 'path:/Users/you/projects/beta',
+        label: 'beta',
+        detail: '/Users/you/projects/beta',
+        kind: 'folder',
+        hostId: 'local'
+      }
+    ])
+    assert.equal(result.target, 'path:/Users/you/projects/beta')
+
+    await worker.request('tapd.workspaces', {})
+    assert.equal(host.callsOf('workspace.list').length, 1)
+    await worker.request('tapd.workspaces', { force: true })
+    assert.equal(host.callsOf('workspace.list').length, 2)
+  } finally {
+    await worker.deactivate()
+  }
+})
+
+test('falls back to the default dispatch workspace when nothing is remembered', async () => {
+  const host = mockHost({
+    settings: {
+      workspaceId: '12345678',
+      owner: '测试用户',
+      dispatchWorkspace: 'path:/Users/you/projects/alpha'
+    },
+    secrets: { token: 'test-token' },
+    results: { 'workspace.list': WORKSPACES }
+  })
+  const worker = await mountWorker(main, { host })
+  try {
+    const result = await worker.request('tapd.workspaces', {})
+    assert.equal(result.target, 'path:/Users/you/projects/alpha')
+  } finally {
+    await worker.deactivate()
+  }
+})
+
+test('uses the chosen workspace first and remembers it for the project', async () => {
+  stubFetch(tapdAnswer)
+  const calls: { args: readonly string[] }[] = []
+  main.setDispatchExec(async (_file, args) => {
+    calls.push({ args })
+    return {
+      stdout: JSON.stringify({
+        ok: true,
+        result: { outcome: { kind: 'structured', sessionId: 'session-chosen-1' } }
+      }),
+      stderr: ''
+    }
+  })
+  try {
+    const host = mockHost({
+      settings: {
+        workspaceId: '12345678',
+        owner: '测试用户',
+        dispatchWorkspace: 'path:/default'
+      },
+      secrets: { token: 'test-token' },
+      storage: { 'dispatchTarget:12345678': 'path:/remembered' }
+    })
+    const worker = await mountWorker(main, { host })
+    const first = await worker.request('tapd.dispatch', {
+      kind: 'bug',
+      id: '1112345678001000513',
+      title: '示例缺陷：页面一直加载中',
+      link: 'https://www.tapd.cn/12345678/bugtrace/bugs/view/1112345678001000513',
+      workspace: 'path:/chosen'
+    })
+    assert.equal(first.ok, true)
+    assert.equal(calls[0]?.args[calls[0].args.indexOf('--worktree') + 1], 'path:/chosen')
+    assert.equal(host.data().storage['dispatchTarget:12345678'], 'path:/chosen')
+    assert.ok(
+      worker.logs.some(
+        (line) =>
+          line === 'dispatch start bug:1112345678001000513 workspace=path:/chosen'
+      )
+    )
+
+    const second = await worker.request('tapd.dispatch', {
+      kind: 'bug',
+      id: '1112345678001000506',
+      title: '示例项目查询筛选条件缺失',
+      link: 'https://www.tapd.cn/12345678/bugtrace/bugs/view/1112345678001000506'
+    })
+    assert.equal(second.ok, true)
+    assert.equal(
+      calls[1]?.args[calls[1].args.indexOf('--worktree') + 1],
+      'path:/chosen'
+    )
+  } finally {
+    main.setDispatchExec(undefined)
+    globalThis.fetch = realFetch
+  }
+})
+
+test('asks for a workspace in the detail view when none is chosen', async () => {
+  let called = 0
+  main.setDispatchExec(async () => {
+    called += 1
+    return { stdout: '{}', stderr: '' }
+  })
+  try {
+    const worker = await mountWorker(main, {
+      host: mockHost({
+        settings: { workspaceId: '12345678', owner: '测试用户', dispatchAgent: 'claude' },
+        secrets: { token: 'test-token' }
+      })
+    })
+    const result = await worker.request('tapd.dispatch', {
+      kind: 'bug',
+      id: '1112345678001000513',
+      title: '示例缺陷：页面一直加载中',
+      link: 'https://www.tapd.cn/12345678/bugtrace/bugs/view/1112345678001000513'
+    })
+    assert.equal(result.ok, false)
+    assert.match(result.message ?? '', /先在详情页选择派单工作区/)
+    assert.equal(called, 0)
+    assert.ok(worker.logs.includes('dispatch failed: 先在详情页选择派单工作区'))
+    await worker.deactivate()
+  } finally {
+    main.setDispatchExec(undefined)
   }
 })
 

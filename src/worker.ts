@@ -13,7 +13,9 @@ import type {
   TapdItem,
   TapdKind,
   TapdListResult,
-  TapdStatusCount
+  TapdStatusCount,
+  TapdWorkspaceOption,
+  TapdWorkspacesResult
 } from './protocol'
 
 const TAPD_BASE = 'https://api.tapd.cn'
@@ -23,6 +25,7 @@ const DEFAULT_LIMIT = 100
 /** Per-kind page size: TAPD accepts 200; the merged list is then capped by the `limit` setting. */
 const FETCH_LIMIT = 200
 const STATUS_MAP_TTL_MS = 60 * 60 * 1000
+const WORKSPACE_CACHE_TTL_MS = 60 * 1000
 const DEFAULT_POLL_MINUTES = 5
 
 const BUG_PRIORITY_LABELS: Record<string, string> = {
@@ -560,18 +563,98 @@ function readCliError(value: unknown): string {
   return [head, ...extras].filter(Boolean).join('；')
 }
 
+type WorkspaceCache = { at: number; workspaces: TapdWorkspaceOption[] }
+
+function workspaceLabel(path: string, name: string): string {
+  if (name) return name
+  const parts = path.replace(/[\\/]+$/, '').split(/[\\/]/)
+  return parts[parts.length - 1] || path
+}
+
+/** The Orca workspaces a dispatch can target, cached for a minute (the list changes rarely). */
+async function listWorkspaces(
+  orca: OrcaWorkerApi,
+  force: boolean
+): Promise<TapdWorkspaceOption[]> {
+  const key = 'workspaces:list'
+  if (!force) {
+    const cached = await orca.storage.get(key).catch(() => null)
+    if (cached && typeof cached === 'object' && !Array.isArray(cached)) {
+      const entry = cached as Partial<WorkspaceCache>
+      if (
+        typeof entry.at === 'number' &&
+        Date.now() - entry.at < WORKSPACE_CACHE_TTL_MS &&
+        Array.isArray(entry.workspaces)
+      ) {
+        return entry.workspaces
+      }
+    }
+  }
+
+  try {
+    const result = await orca.host.call('workspace.list', {})
+    const workspaces = (Array.isArray(result.workspaces) ? result.workspaces : [])
+      .filter((entry) => typeof entry.path === 'string' && entry.path.trim() !== '')
+      .map((entry) => {
+        const path = entry.path.trim()
+        return {
+          selector: `path:${path}`,
+          label: workspaceLabel(path, text(entry.name, '')),
+          detail: path,
+          kind: text(entry.kind, ''),
+          hostId: text(entry.hostId, '')
+        }
+      })
+    await orca.storage.set(key, { at: Date.now(), workspaces }).catch(() => undefined)
+    return workspaces
+  } catch (error) {
+    orca.log(
+      `workspace.list failed: ${error instanceof Error ? error.message : String(error)}`
+    )
+    return []
+  }
+}
+
+async function dispatchTarget(
+  orca: OrcaWorkerApi,
+  workspaceId: string,
+  settings: Record<string, unknown>
+): Promise<string> {
+  const remembered = workspaceId
+    ? text(await orca.storage.get(`dispatchTarget:${workspaceId}`).catch(() => null), '')
+    : ''
+  return remembered || text(settings['dispatchWorkspace'], '')
+}
+
+async function workspacesForPanel(
+  orca: OrcaWorkerApi,
+  force: boolean
+): Promise<TapdWorkspacesResult> {
+  const settings = await orca.settings.get()
+  const workspaceId = text(settings['workspaceId'], '')
+  const [workspaces, target] = await Promise.all([
+    listWorkspaces(orca, force),
+    dispatchTarget(orca, workspaceId, settings)
+  ])
+  return { workspaces, target }
+}
+
 async function dispatchItem(
   orca: OrcaWorkerApi,
-  input: { kind: TapdKind; id: string; title: string; link: string },
+  input: { kind: TapdKind; id: string; title: string; link: string; workspace?: string },
   signal?: AbortSignal
 ): Promise<TapdDispatchResult> {
   const settings = await orca.settings.get()
-  const workspace = text(settings['dispatchWorkspace'], '')
+  const workspaceId = text(settings['workspaceId'], '')
+  const remembered = workspaceId
+    ? text(await orca.storage.get(`dispatchTarget:${workspaceId}`).catch(() => null), '')
+    : ''
+  const workspace =
+    text(input.workspace, '') || remembered || text(settings['dispatchWorkspace'], '')
   const agent = text(settings['dispatchAgent'], 'claude')
   const model = text(settings['dispatchModel'], '')
   if (!workspace) {
-    const message =
-      '先在设置里填写「派单目标工作区」（如 path:/root/projects/your-repo），并确认它已在 Orca 中打开'
+    const message = '先在详情页选择派单工作区'
     orca.log(`dispatch failed: ${message}`)
     return { ok: false, message }
   }
@@ -643,6 +726,11 @@ async function dispatchItem(
   }
 
   await orca.storage.set(key, { sessionId, at: Date.now() }).catch(() => undefined)
+  if (workspaceId) {
+    await orca.storage
+      .set(`dispatchTarget:${workspaceId}`, workspace)
+      .catch(() => undefined)
+  }
   orca.log(`dispatch ok session=${sessionId}`)
   return { ok: true, sessionId }
 }
@@ -732,6 +820,9 @@ export default function activate(orca: OrcaWorkerApi): void {
   )
   orca.panels.handle('tapd.detail', async (input, context) =>
     loadDetail(orca, input.kind, input.id, context.signal)
+  )
+  orca.panels.handle('tapd.workspaces', async (input) =>
+    workspacesForPanel(orca, input?.force === true)
   )
   orca.panels.handle('tapd.dispatch', async (input, context) =>
     dispatchItem(orca, input, context.signal)

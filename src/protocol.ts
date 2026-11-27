@@ -46,6 +46,24 @@ export type TapdListResult = {
 
 export type TapdComment = { author: string; created: string; text: string }
 
+/** One Orca workspace the person can dispatch to. */
+export type TapdWorkspaceOption = {
+  /** What `orca agent launch --worktree` takes: `path:<absolute-path>`. */
+  selector: string
+  /** Workspace name, else the path's last segment. */
+  label: string
+  /** Full path, shown after the label so same-named workspaces stay distinguishable. */
+  detail: string
+  kind: string
+  hostId: string
+}
+
+export type TapdWorkspacesResult = {
+  workspaces: TapdWorkspaceOption[]
+  /** Remembered dispatch selector: storage for this TAPD project, then the default setting. */
+  target: string
+}
+
 export type TapdDetail = {
   title: string
   kind: TapdKind
@@ -82,9 +100,18 @@ declare module 'orca' {
     'tapd.list': { input: { force?: boolean } | undefined; output: TapdListResult }
     /** Full fields, flattened description and comments for one work item. */
     'tapd.detail': { input: { kind: TapdKind; id: string }; output: TapdDetailResult }
-    /** Launches an Orca agent for one work item in the configured workspace. */
+    /** Orca workspaces this person can dispatch to, plus the remembered selector. */
+    'tapd.workspaces': { input: { force?: boolean } | undefined; output: TapdWorkspacesResult }
+    /** Launches an Orca agent for one work item in the chosen workspace. */
     'tapd.dispatch': {
-      input: { kind: TapdKind; id: string; title: string; link: string }
+      input: {
+        kind: TapdKind
+        id: string
+        title: string
+        link: string
+        /** Chosen in the detail view; falls back to the project's remembered selector. */
+        workspace?: string
+      }
       output: TapdDispatchResult
     }
   }
