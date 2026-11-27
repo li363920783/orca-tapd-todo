@@ -1,5 +1,5 @@
 // Runs src/worker.ts's activate(orca) with the orca object Orca passes, over a mock host.
-import { assert, mockHost, mountWorker, test } from 'orca/testing'
+import { assert, hostError, mockHost, mountWorker, test } from 'orca/testing'
 import * as main from './worker'
 
 // The status-bar poll would otherwise race these fetch stubs with an initial tick.
@@ -557,6 +557,59 @@ test('falls back to the default dispatch workspace when nothing is remembered', 
   try {
     const result = await worker.request('tapd.workspaces', {})
     assert.equal(result.target, 'path:/Users/you/projects/alpha')
+  } finally {
+    await worker.deactivate()
+  }
+})
+
+test('returns workspace.list failures and does not cache them', async () => {
+  const host = mockHost({
+    settings: { workspaceId: '12345678', owner: '测试用户' },
+    secrets: { token: 'test-token' },
+    results: {
+      'workspace.list': () => {
+        throw hostError('capability_denied', 'workspace:read is not granted')
+      }
+    }
+  })
+  const worker = await mountWorker(main, { host })
+  try {
+    const first = await worker.request('tapd.workspaces', {})
+    assert.deepEqual(first.workspaces, [])
+    assert.deepEqual(first.error, {
+      code: 'capability_denied',
+      message: 'workspace:read is not granted'
+    })
+
+    const second = await worker.request('tapd.workspaces', {})
+    assert.deepEqual(second.error, {
+      code: 'capability_denied',
+      message: 'workspace:read is not granted'
+    })
+    assert.equal(host.callsOf('workspace.list').length, 2)
+    assert.ok(
+      worker.logs.includes(
+        'workspace.list failed: capability_denied: workspace:read is not granted'
+      )
+    )
+  } finally {
+    await worker.deactivate()
+  }
+})
+
+test('does not cache an empty workspace list', async () => {
+  const host = mockHost({
+    settings: { workspaceId: '12345678', owner: '测试用户' },
+    secrets: { token: 'test-token' },
+    results: { 'workspace.list': { workspaces: [], truncated: false } }
+  })
+  const worker = await mountWorker(main, { host })
+  try {
+    const first = await worker.request('tapd.workspaces', {})
+    assert.deepEqual(first.workspaces, [])
+    assert.equal(first.error, undefined)
+    await worker.request('tapd.workspaces', {})
+    assert.equal(host.callsOf('workspace.list').length, 2)
   } finally {
     await worker.deactivate()
   }

@@ -337,10 +337,81 @@ test('disables dispatch and warns when there is no Orca workspace', async () => 
   await view.settled()
 
   assert.ok(view.find({ text: /没有可选的 Orca 工作区/ }))
+  assert.ok(view.find({ text: /Orca 里还没有打开的项目工作区/ }))
+  assert.ok(view.find({ text: /再点『刷新工作区』/ }))
   assert.equal(view.find({ type: 'Callout' })?.props['tone'], 'warning')
+  assert.ok(view.find({ type: 'Button', text: '刷新工作区' }))
   const button = view.find({ text: '一键派单', type: 'Button' })
   assert.ok(button)
   assert.equal(button.disabled, true)
+
+  assert.deepEqual(view.errors, [])
+  assert.deepEqual(view.refusals, [])
+  await view.unmount()
+})
+
+test('shows a danger callout with the host error code when workspace.list fails', async () => {
+  const host = mockHost({
+    requests: {
+      'tapd.list': () => READY,
+      'tapd.detail': detailFor,
+      'tapd.workspaces': () => ({
+        workspaces: [],
+        target: '',
+        error: { code: 'capability_denied', message: 'workspace:read is not granted' }
+      })
+    },
+    settings: { workspaceId: '12345678', owner: '测试用户', onlyOpen: true }
+  })
+  const view = await mount(panel, { host })
+
+  await view.press({ text: /示例缺陷：页面一直加载中/ })
+  await view.settled()
+
+  assert.ok(view.find({ text: /读取 Orca 工作区失败/ }))
+  assert.ok(view.find({ text: /capability_denied: workspace:read is not granted/ }))
+  assert.ok(view.find({ text: /Settings → Plugins 重新批准本插件/ }))
+  const callout = view
+    .findAll({ type: 'Callout' })
+    .find((element) => element.text.includes('读取 Orca 工作区失败'))
+  assert.ok(callout)
+  assert.equal(callout.props['tone'], 'danger')
+  assert.equal(view.find({ text: '一键派单', type: 'Button' })?.disabled, true)
+
+  assert.deepEqual(view.errors, [])
+  assert.deepEqual(view.refusals, [])
+  await view.unmount()
+})
+
+test('refreshes workspaces with force and recovers from an empty list', async () => {
+  const inputs: unknown[] = []
+  let first = true
+  const host = mockHost({
+    requests: {
+      'tapd.list': () => READY,
+      'tapd.detail': detailFor,
+      'tapd.workspaces': (input) => {
+        inputs.push(input)
+        if (first) {
+          first = false
+          return { workspaces: [], target: '' }
+        }
+        return WORKSPACES
+      }
+    },
+    settings: { workspaceId: '12345678', owner: '测试用户', onlyOpen: true }
+  })
+  const view = await mount(panel, { host })
+
+  await view.press({ text: /示例缺陷：页面一直加载中/ })
+  await view.settled()
+  assert.ok(view.find({ text: /Orca 里还没有打开的项目工作区/ }))
+  assert.equal(view.find({ text: '一键派单', type: 'Button' })?.disabled, true)
+
+  await view.press({ type: 'Button', text: '刷新工作区' })
+  assert.deepEqual(inputs[1], { force: true })
+  assert.equal(view.valueOf({ label: '派单到工作区' }), 'path:/Users/you/projects/alpha')
+  assert.equal(view.find({ text: '一键派单', type: 'Button' })?.disabled, false)
 
   assert.deepEqual(view.errors, [])
   assert.deepEqual(view.refusals, [])

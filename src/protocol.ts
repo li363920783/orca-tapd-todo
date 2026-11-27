@@ -58,10 +58,14 @@ export type TapdWorkspaceOption = {
   hostId: string
 }
 
+export type TapdWorkspaceError = { code: string; message: string }
+
 export type TapdWorkspacesResult = {
   workspaces: TapdWorkspaceOption[]
   /** Remembered dispatch selector: storage for this TAPD project, then the default setting. */
   target: string
+  /** Set when Orca's workspace.list failed; workspaces is then empty. */
+  error?: TapdWorkspaceError
 }
 
 export type TapdDetail = {
